@@ -1,0 +1,38 @@
+name: test_mobile_response_8e65cddc
+description: "Premium AI-powered business chatbot template for WhatsApp and Telegram style interactions"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.6.1
+  go_router: ^14.2.0
+  dio: ^5.4.0
+  socket_io_client: ^2.0.3
+  shared_preferences: ^2.2.2
+  flutter_animate: ^4.5.0
+  intl: ^0.19.0
+  uuid: ^4.4.0
+  cached_network_image: ^3.3.1
+  flutter_svg: ^2.0.9
+  lottie: ^3.1.2
+  flutter_markdown: ^0.7.3
+  url_launcher: ^6.3.0
+  connectivity_plus: ^6.0.3
+  image_picker: ^1.2.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/icons/
+    - assets/lottie/

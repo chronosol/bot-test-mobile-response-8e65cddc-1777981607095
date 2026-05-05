@@ -1,0 +1,147 @@
+name: Flutter Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_id:
+        description: 'Build ID'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Pre-flight: validate pubspec.yaml with Python (shell-safe) ──────────
+      # Python's yaml parser is identical to Flutter's — if this passes,
+      # flutter pub get will pass. Using Python avoids all bash quoting issues.
+      - name: Validate pubspec.yaml
+        run: |
+          python3 - <<'PYEOF'
+          import sys, re
+
+          try:
+              with open('pubspec.yaml', 'r') as f:
+                  content = f.read()
+          except FileNotFoundError:
+              print("ERROR: pubspec.yaml not found")
+              sys.exit(1)
+
+          errors = []
+
+          # 1. Parse with Python's yaml to catch any YAML syntax errors
+          try:
+              import yaml
+              data = yaml.safe_load(content)
+          except yaml.YAMLError as e:
+              print(f"ERROR: pubspec.yaml YAML parse failed: {e}")
+              sys.exit(1)
+
+          # 2. name must be unquoted snake_case
+          name = data.get('name', '')
+          if not re.match(r'^[a-z][a-z0-9_]*$', str(name)):
+              errors.append(f"name '{name}' is not valid snake_case")
+
+          # 3. environment.sdk must have a lower bound
+          env = data.get('environment', {})
+          sdk = str(env.get('sdk', ''))
+          if not sdk:
+              errors.append("environment.sdk constraint is missing")
+          elif sdk.startswith('^'):
+              errors.append(f"environment.sdk '{sdk}' uses caret — must use range '>=X.Y.Z <4.0.0'")
+          elif '>=' not in sdk:
+              errors.append(f"environment.sdk '{sdk}' has no lower bound — must use '>=X.Y.Z <4.0.0'")
+
+          # 4. No template literals leaked into any value
+          if '${' in content:
+              errors.append("pubspec.yaml contains template literal '${' — replace with actual value")
+
+          # 5. No codegen packages
+          forbidden = ['freezed', 'freezed_annotation', 'json_annotation', 'json_serializable', 'build_runner']
+          all_deps = {}
+          all_deps.update(data.get('dependencies', {}) or {})
+          all_deps.update(data.get('dev_dependencies', {}) or {})
+          for pkg in forbidden:
+              if pkg in all_deps:
+                  errors.append(f"forbidden codegen package '{pkg}' found in dependencies")
+
+          if errors:
+              print("pubspec.yaml validation FAILED:")
+              for e in errors:
+                  print(f"  - {e}")
+              sys.exit(1)
+          else:
+              print(f"pubspec.yaml OK — app: {name}, sdk: {sdk}")
+          PYEOF
+
+      # ── Flutter setup ────────────────────────────────────────────────────────
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.32.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      # ── Static analysis (catches type errors, missing imports, deprecated APIs) ─
+      - name: Flutter analyze
+        run: flutter analyze --no-fatal-infos
+        continue-on-error: false
+
+      # ── Phantom import check ─────────────────────────────────────────────────
+      - name: Check for phantom imports
+        run: |
+          python3 - <<'PYEOF'
+          import sys, os, re
+
+          with open('pubspec.yaml') as f:
+              import yaml
+              pubspec = yaml.safe_load(f.read())
+          app_name = pubspec.get('name', '')
+
+          errors = []
+          dart_files = []
+          for root, dirs, files in os.walk('lib'):
+              for fname in files:
+                  if fname.endswith('.dart'):
+                      dart_files.append(os.path.join(root, fname))
+
+          all_lib_files = set(
+              os.path.normpath(p) for p in dart_files
+          )
+
+          for dart_path in dart_files:
+              with open(dart_path) as f:
+                  src = f.read()
+              for m in re.finditer(r"^import\s+'package:" + re.escape(app_name) + r"/([^']+)'", src, re.MULTILINE):
+                  lib_path = os.path.normpath('lib/' + m.group(1))
+                  if lib_path not in all_lib_files:
+                      errors.append(f"PHANTOM IMPORT in {dart_path}: '{lib_path}' does not exist")
+
+          if errors:
+              print(f"Found {len(errors)} phantom import(s):")
+              for e in errors:
+                  print(f"  {e}")
+              sys.exit(1)
+          else:
+              print(f"Phantom import check OK — scanned {len(dart_files)} Dart files")
+          PYEOF
+
+      # ── Build APK ────────────────────────────────────────────────────────────
+      - name: Build APK
+        run: flutter build apk --release --no-tree-shake-icons
+
+      # ── Upload artifact ──────────────────────────────────────────────────────
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release.apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 7
